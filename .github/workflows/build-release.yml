@@ -141,29 +141,18 @@ jobs:
             exit 1
           }
           $size = (Get-Item "dist/OSINTScraper/OSINTScraper.exe").Length / 1MB
-          Write-Host "✓ OSINTScraper.exe exists, size: $([math]::Round($size, 1)) MB"
+          Write-Host "OSINTScraper.exe exists, size: $([math]::Round($size, 1)) MB"
 
-          # Копируем debug .bat рядом с exe (для пользователей чтобы могли увидеть ошибки)
+          # Копируем debug .bat рядом с exe
           Copy-Item "packaging/OSINTScraper-debug.bat" -Destination "dist/OSINTScraper/" -ErrorAction SilentlyContinue
           if (Test-Path "dist/OSINTScraper/OSINTScraper-debug.bat") {
-            Write-Host "✓ OSINTScraper-debug.bat copied"
+            Write-Host "OSINTScraper-debug.bat copied"
           } else {
-            # Если не скопировалось — создаём прямо тут
-            @"
-@echo off
-cd /d "%~dp0"
-echo === OSINT Scraper debug mode ===
-echo Crash log: %LOCALAPPDATA%\OSINTScraper\logs\crash.log
-echo.
-OSINTScraper.exe
-echo.
-echo === Exited with code: %ERRORLEVEL% ===
-echo Crash log content:
-type "%LOCALAPPDATA%\OSINTScraper\logs\crash.log" 2>nul
-echo.
-pause
-"@ | Out-File -FilePath "dist/OSINTScraper/OSINTScraper-debug.bat" -Encoding ascii
-            Write-Host "✓ OSINTScraper-debug.bat created inline"
+            Write-Host "WARNING: OSINTScraper-debug.bat not copied (will be created inline)"
+            # Создаём простую .bat через Set-Content (без here-string чтобы не сломать YAML)
+            $batContent = '@echo off' + "`n" + 'cd /d "%~dp0"' + "`n" + 'OSINTScraper.exe' + "`n" + 'echo Crash log:' + "`n" + 'type "%LOCALAPPDATA%\OSINTScraper\logs\crash.log" 2>nul' + "`n" + 'pause' + "`n"
+            Set-Content -Path "dist/OSINTScraper/OSINTScraper-debug.bat" -Value $batContent -Encoding ascii
+            Write-Host "OSINTScraper-debug.bat created inline"
           }
 
       - name: Harvest files with heat.exe
