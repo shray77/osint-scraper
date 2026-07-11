@@ -25,6 +25,7 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from gui.workers import SearchWorker
+from gui.updater import UpdateCheckMixin
 
 # Пытаемся импортировать основные модули
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -333,7 +334,7 @@ class CollectorStatusItem(QtWidgets.QWidget):
 # ---------------------------------------------------------------------------
 # Главное окно
 # ---------------------------------------------------------------------------
-class MainWindow(QtWidgets.QMainWindow):
+class MainWindow(QtWidgets.QMainWindow, UpdateCheckMixin):
     """Главное окно приложения."""
 
     def __init__(self):
@@ -382,6 +383,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Меню
         self._build_menu()
+
+        # Авто-проверка обновлений (через 3 сек)
+        try:
+            self._setup_update_checker()
+        except Exception as e:
+            import logging
+            logging.getLogger("osint.main_window").warning("Update setup failed: %s", e)
 
     # ------------------------------------------------------------------
     # Построение UI
@@ -490,9 +498,9 @@ class MainWindow(QtWidgets.QMainWindow):
         clayout = QtWidgets.QVBoxLayout(collectors_group)
         clayout.setSpacing(2)
 
-        # Создаём элементы для всех коллекторов
-        for name in ["egrul_nalog", "egrul_nalog_pdf", "rusprofile", "zachestnyibiznes",
-                     "list_org", "findcompany", "market_search", "rosstat", "company_site"]:
+        # Создаём элементы для всех коллекторов v1.4
+        for name in ["egrul_nalog", "egrul_nalog_pdf", "bo_nalog", "list_org",
+                     "checko", "market_search", "rosstat", "company_site"]:
             item = CollectorStatusItem(name)
             self.collector_items[name] = item
             clayout.addWidget(item)
@@ -850,6 +858,15 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(act_exit)
 
         help_menu = menubar.addMenu("Справка")
+        act_update = QtGui.QAction("🔄 Проверить обновления", self)
+        act_update.setShortcut("Ctrl+U")
+        act_update.triggered.connect(self.check_for_updates_manual)
+        help_menu.addAction(act_update)
+        help_menu.addSeparator()
+        act_github = QtGui.QAction("🌐 Открыть на GitHub", self)
+        act_github.triggered.connect(lambda: webbrowser.open("https://github.com/shray77/osint-scraper"))
+        help_menu.addAction(act_github)
+        help_menu.addSeparator()
         act_about = QtGui.QAction("О программе", self)
         act_about.triggered.connect(self._show_about)
         help_menu.addAction(act_about)

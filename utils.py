@@ -14,9 +14,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import logging.handlers
 import os
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,8 +56,30 @@ DEFAULT_HEADERS = {
 # ---------------------------------------------------------------------------
 # Cache: простое файловое кэширование GET-ответов по URL-hash
 # ---------------------------------------------------------------------------
-CACHE_DIR = Path(os.environ.get("OSINT_CACHE_DIR", "/tmp/osint_cache"))
+def _default_cache_dir():
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "OSINTScraper" / "cache"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches" / "OSINTScraper"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "osint-scraper"
+    return base
+
+def _default_log_dir():
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "OSINTScraper" / "logs"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Logs" / "OSINTScraper"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "osint-scraper"
+    return base
+
+CACHE_DIR = Path(os.environ.get("OSINT_CACHE_DIR", _default_cache_dir()))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+PDF_CACHE_DIR = CACHE_DIR / "egrul_pdf"
+PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = _default_log_dir()
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _cache_key(url: str, method: str = "GET") -> Path:
@@ -564,3 +588,44 @@ def duckduckgo_search(query: str, client: HttpClient, max_results: int = 8) -> l
         logger.debug("bing playwright failed: %s", e)
 
     return []
+
+# PDF cache для выписок ЕГРЮЛ
+PDF_CACHE_TTL_SECONDS = 24 * 3600
+
+def cache_get_pdf(inn):
+    p = PDF_CACHE_DIR / f"{inn}.pdf"
+    if not p.exists():
+        return None
+    try:
+        import time as _t
+        if _t.time() - p.stat().st_mtime > PDF_CACHE_TTL_SECONDS:
+            return None
+        return p.read_bytes()
+    except Exception:
+        return None
+
+def cache_put_pdf(inn, pdf_bytes):
+    p = PDF_CACHE_DIR / f"{inn}.pdf"
+    try:
+        p.write_bytes(pdf_bytes)
+    except Exception:
+        pass
+
+def setup_file_logger(level=None):
+    import logging as _lg
+    if level is None:
+        level = _lg.INFO
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            LOG_DIR / "osint.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+        handler.setLevel(level)
+        handler.setFormatter(_lg.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+        _lg.getLogger().addHandler(handler)
+        return handler
+    except Exception:
+        return None
+
+# Web search — алиас для duckduckgo_search (v1.2+)
+def web_search(query, client, max_results=8):
+    return duckduckgo_search(query, client, max_results)
+

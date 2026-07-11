@@ -6,6 +6,7 @@ ExcelReporter    — многолистовой .xlsx: Профиль / Метр
 """
 from __future__ import annotations
 
+import csv
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -485,3 +486,62 @@ class ExcelReporter:
             row += 1
         ws.column_dimensions["A"].width = 10
         ws.column_dimensions["B"].width = 100
+
+
+# ---------------------------------------------------------------------------
+# CSV Reporter
+# ---------------------------------------------------------------------------
+class CsvReporter:
+    FIELDS = [
+        "input", "inn", "ogrn", "kpp", "short_name", "full_name",
+        "registration_date", "status", "region", "legal_address",
+        "director", "okved_main", "okved_code", "industry",
+        "revenue", "profit", "assets", "employees",
+        "revenue_year", "profit_year",
+        "site_url", "phones", "emails",
+        "sources_count", "errors_count", "generated_at",
+    ]
+
+    def render(self, report):
+        import io
+        buf = io.StringIO()
+        writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(self.FIELDS)
+        writer.writerow(self._extract_row(report))
+        return buf.getvalue()
+
+    def save(self, report, path):
+        Path(path).write_text(self.render(report), encoding="utf-8-sig")
+
+    def save_batch(self, reports, path):
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(self.FIELDS)
+            for report in reports:
+                writer.writerow(self._extract_row(report))
+
+    def _extract_row(self, report):
+        c = report.get("company", {})
+        s = report.get("company_site", {})
+        bfo = c.get("bfo_years") or []
+        latest = bfo[0] if bfo else {}
+        def _clean(v):
+            if v is None: return ""
+            if isinstance(v, list): return ", ".join(str(x) for x in v)
+            return str(v).replace("\n", " ").replace(";", ",").strip()
+        return [
+            _clean(report.get("company_input")), _clean(c.get("inn")),
+            _clean(c.get("ogrn")), _clean(c.get("kpp")),
+            _clean(c.get("short_name")), _clean(c.get("full_name")),
+            _clean(c.get("registration_date")), _clean(c.get("status")),
+            _clean(c.get("region")), _clean(c.get("legal_address")),
+            _clean(c.get("director")), _clean(c.get("okved_main")),
+            _clean(c.get("okved_code")), _clean(c.get("industry")),
+            _clean(c.get("revenue")), _clean(c.get("profit")),
+            _clean(c.get("assets")), _clean(c.get("employees")),
+            _clean(latest.get("year")), _clean(latest.get("year")),
+            _clean(s.get("site_url")), ", ".join(s.get("phones", [])),
+            ", ".join(s.get("emails", [])),
+            len(report.get("sources_used", [])), len(report.get("errors", [])),
+            _clean(report.get("generated_at")),
+        ]

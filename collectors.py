@@ -838,3 +838,166 @@ class CompanySiteCollector(BaseCollector):
             logger.exception("CompanySite error")
             res.errors.append(f"exception: {e}")
         return res
+
+
+# ---------------------------------------------------------------------------
+# BoNalogCollector — bo.nalog.gov.ru (официальная БФО от ФНС)
+# ---------------------------------------------------------------------------
+class BoNalogCollector(BaseCollector):
+    name = "bo_nalog"
+    BASE = "https://bo.nalog.gov.ru"
+
+    def collect(self, query):
+        res = CollectorResult(source=self.name)
+        try:
+            inn = re.sub(r"\D", "", query)
+            if not inn or len(inn) not in (10, 12):
+                res.errors.append(f"invalid inn: {query}")
+                return res
+            search_url = f"{self.BASE}/advanced-search/organizations?inn={inn}&page=0"
+            r = self.client.get(search_url, headers={
+                "Accept": "application/json",
+                "Referer": f"{self.BASE}/",
+                "X-Requested-With": "XMLHttpRequest",
+            })
+            res.urls.append(search_url)
+            if not r.ok:
+                res.errors.append(f"search_failed: {r.status}")
+                return res
+            try:
+                sj = json.loads(r.text)
+            except json.JSONDecodeError:
+                res.errors.append("json_decode")
+                return res
+            content = sj.get("content") or []
+            if not content:
+                res.errors.append("no_org_found")
+                return res
+            org = content[0]
+            org_id = org.get("id")
+            if not org_id:
+                res.errors.append("no_org_id")
+                return res
+            res.data["bfo_inn"] = clean_text(org.get("inn") or "").replace("<strong>", "").replace("</strong>", "")
+            res.data["bfo_short_name"] = clean_text(org.get("shortName") or "")
+            res.data["bfo_ogrn"] = org.get("ogrn") or ""
+            res.data["bfo_okved"] = org.get("okved2") or ""
+            res.data["bfo_status"] = "действует" if org.get("statusCode") == "ACTIVE" else (org.get("statusCode") or "")
+            res.data["bfo_region"] = clean_text(org.get("region") or "")
+            current_year = 2025
+            all_bfo = []
+            for year in [current_year, current_year - 1, current_year - 2, current_year - 3]:
+                bfo_url = f"{self.BASE}/nbo/organizations/{org_id}/bfo?year={year}"
+                rb = self.client.get(bfo_url, headers={"Accept": "application/json", "Referer": f"{self.BASE}/"})
+                res.urls.append(bfo_url)
+                if not rb.ok:
+                    continue
+                try:
+                    bj = json.loads(rb.text)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(bj, list):
+                    continue
+                for item in bj:
+                    period = item.get("period") or str(year)
+                    gain = item.get("gainSum")
+                    actives = item.get("actives")
+                    revenue = gain
+                    profit = None
+                    equity = None
+                    for tc in item.get("typeCorrections", []) or []:
+                        corr = tc.get("correction") or {}
+                        fin = corr.get("financialResult")
+                        bal = corr.get("balance")
+                        if fin:
+                            revenue = fin.get("current2110") or revenue
+                            profit = fin.get("current2400")
+                        if bal:
+                            equity = bal.get("current1300")
+                    entry = {"year": period, "revenue": revenue, "profit": profit, "actives": actives, "equity": equity}
+                    all_bfo.append(entry)
+            if all_bfo:
+                seen = set()
+                dedup = []
+                for e in all_bfo:
+                    y = e.get("year")
+                    if y and y not in seen:
+                        seen.add(y)
+                        dedup.append(e)
+                dedup.sort(key=lambda x: x.get("year", ""), reverse=True)
+                res.data["bfo_years"] = dedup
+                latest = dedup[0]
+                if latest.get("revenue") is not None:
+                    rev = latest["revenue"]
+                    res.data.setdefault("revenue", f"{int(rev):,} тыс. руб. ({latest['year']})".replace(",", " "))
+                if latest.get("profit") is not None:
+                    pf = latest["profit"]
+                    sign = "+" if pf >= 0 else ""
+                    res.data.setdefault("profit", f"{sign}{int(pf):,} тыс. руб. ({latest['year']})".replace(",", " "))
+                if latest.get("actives") is not None:
+                    a = latest["actives"]
+                    res.data.setdefault("assets", f"{int(a):,} тыс. руб. ({latest['year']})".replace(",", " "))
+                res.data.setdefault("finance_source", f"bo.nalog.gov.ru (org_id={org_id})")
+        except Exception as e:
+            logger.exception("BoNalog error")
+            res.errors.append(f"exception: {e}")
+        return res
+
+
+# ---------------------------------------------------------------------------
+# CheckoCollector — checko.ru (rate-limited)
+# ---------------------------------------------------------------------------
+class CheckoCollector(BaseCollector):
+    name = "checko"
+    BASE = "https://www.checko.ru"
+
+    def collect(self, query):
+        res = CollectorResult(source=self.name)
+        try:
+            url = f"{self.BASE}/search?query={quote_plus(query)}"
+            r = self.client.get(url, headers={"Referer": self.BASE, "Accept-Language": "ru-RU,ru;q=0.9"})
+            res.urls.append(url)
+            if r.status in (429, 503):
+                res.errors.append(f"rate_limited (HTTP {r.status})")
+                return res
+            if not r.ok:
+                res.errors.append(f"request_failed: {r.status}")
+                return res
+            if len(r.text) < 1000:
+                res.errors.append("response_too_short")
+                return res
+            soup = r.soup()
+            card_link = None
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                if "/company/" in href:
+                    card_link = urljoin(self.BASE, href) if href.startswith("/") else href
+                    break
+            if card_link:
+                rc = self.client.get(card_link, headers={"Referer": url})
+                res.urls.append(card_link)
+                if rc.ok:
+                    self._parse_card(rc.soup(), res)
+                    return res
+            self._parse_card(soup, res)
+        except Exception as e:
+            logger.exception("Checko error")
+            res.errors.append(f"exception: {e}")
+        return res
+
+    def _parse_card(self, soup, res):
+        text = soup.get_text(" ", strip=True)
+        h1 = soup.select_one("h1, h2")
+        if h1:
+            res.data.setdefault("full_name", clean_text(h1.get_text()))
+        for label, key in [("ИНН", "inn"), ("ОГРН", "ogrn"), ("КПП", "kpp"),
+                           ("Дата регистрации", "registration_date"),
+                           ("Юридический адрес", "legal_address"),
+                           ("Директор", "director"), ("Учредитель", "founder"),
+                           ("Основной ОКВЭД", "okved_main"), ("Статус", "status"),
+                           ("Выручка", "revenue"), ("Чистая прибыль", "profit")]:
+            m = re.search(rf"{re.escape(label)}\s*[:：]?\s*([^\n\r•|]+?)(?:\s{{2,}}|$|•|\|)", text)
+            if m:
+                val = clean_text(m.group(1))
+                if val and val.lower() not in ("—", "-", "нет данных", ""):
+                    res.data.setdefault(key, val)
