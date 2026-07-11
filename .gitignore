@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+spec/
+
+# Cache
+.osint_cache/
+/tmp/osint_cache/
+
+# Output (но оставим примеры)
+output/*
+!output/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Screenshots (тоже зальём — нужны для README)

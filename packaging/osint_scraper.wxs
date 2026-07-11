@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX-описание MSI-пакета для OSINT Scraper.
+
+  Как собрать (вручную на Windows):
+    1. Сначала соберите exe через PyInstaller:
+         pyinstaller packaging/osint_scraper.spec
+       Результат: dist/OSINTScraper/ (папка с exe и зависимостями)
+
+    2. Установите WiX Toolset v3.11+ (https://wixtoolset.org/releases/)
+       и candle.exe + light.exe должны быть в PATH
+
+    3. Запустите packaging/build_msi.bat
+       или вручную:
+         candle packaging/osint_scraper.wxs -o packaging/OSINTScraper.wixobj
+         light packaging/OSINTScraper.wixobj -o packaging/OSINTScraper-1.1.0.msi -ext WixUIExtension
+
+  Результат: OSINTScraper-1.1.0.msi — стандартный Windows Installer.
+
+  Примечание: все строки намеренно на английском, чтобы избежать проблем
+  с codepage (LGHT0311). Кириллица в инсталляторе не критична — приложение
+  само по себе русскоязычное.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="OSINT Scraper"
+           Language="1033"
+           Version="1.1.0.0"
+           Manufacturer="OSINT Tools"
+           UpgradeCode="7B5E3F2A-1234-5678-9ABC-DEF012345678">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="OSINT Scraper - analytics for Russian companies"
+             Keywords="OSINT, scraper, EGRUL, nalog, Russia" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <Media Id="1" Cabinet="OSINTScraper.cab" EmbedCab="yes" />
+
+    <!-- Свойства для ARP (Add/Remove Programs) -->
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/shray77/osint-scraper" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/shray77/osint-scraper" />
+
+    <!-- Icon for app -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.SourceDir)\_internal\gui\resources\icon.ico" />
+
+    <!-- Features -->
+    <Feature Id="Complete" Title="OSINT Scraper" Level="1"
+             Description="Complete installation of OSINT Scraper">
+      <Feature Id="MainProgram" Title="Executable files" Level="1">
+        <ComponentGroupRef Id="ProductComponents" />
+      </Feature>
+      <Feature Id="Shortcuts" Title="Shortcuts" Level="1">
+        <ComponentRef Id="StartMenuShortcut" />
+        <ComponentRef Id="DesktopShortcut" />
+      </Feature>
+    </Feature>
+
+    <!-- Directories -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="OSINTScraper">
+          <!-- Сюда PyInstaller положит все файлы — harvest через heat.exe -->
+        </Directory>
+      </Directory>
+
+      <!-- Start Menu -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="StartMenuDir" Name="OSINT Scraper" />
+      </Directory>
+
+      <!-- Desktop -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- Start Menu shortcut -->
+    <DirectoryRef Id="StartMenuDir">
+      <Component Id="StartMenuShortcut" Guid="A1B2C3D4-1111-2222-3333-444455556666">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="OSINT Scraper"
+                  Description="Analytics for Russian companies from open sources"
+                  Target="[INSTALLDIR]OSINTScraper.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon.ico" />
+        <RemoveFolder Id="StartMenuDirRem" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\OSINTScraper\StartMenu"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Desktop shortcut -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="A1B2C3D4-7777-8888-9999-AAAABBBBCCCC">
+        <Shortcut Id="DesktopShortcut"
+                  Name="OSINT Scraper"
+                  Description="Analytics for Russian companies"
+                  Target="[INSTALLDIR]OSINTScraper.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon.ico" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\OSINTScraper\Desktop"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- UI - standard installer with folder selection -->
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+      <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="OSINT Scraper installed. Open it from the Start Menu or Desktop shortcut." />
+      <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="0" />
+    </UI>
+
+    <!-- License agreement -->
+    <WixVariable Id="WixUILicenseRtf" Value="packaging/license.rtf" />
+
+  </Product>
+
+  <!--
+    ComponentGroup "ProductComponents" — generated by heat.exe from
+    dist/OSINTScraper/ directory, see build_msi.bat
+  -->
+</Wix>

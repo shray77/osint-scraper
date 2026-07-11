@@ -1,0 +1,404 @@
+name: Build Release
+# v1.3.6 re-trigger
+
+# Триггеры:
+# - push тега v* → собираем и публикуем Release
+# - ручной запуск (workflow_dispatch)
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия (например, 1.1.1)'
+        required: true
+        default: '1.1.1'
+
+permissions:
+  contents: write   # чтобы создавать Release и загружать assets
+
+jobs:
+  # --------------------------------------------------------------------
+  # Windows: MSI + portable ZIP
+  # --------------------------------------------------------------------
+  build-windows:
+    name: 🪟 Build Windows (MSI + ZIP)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python deps
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Locate WiX Toolset (pre-installed on windows-latest)
+        shell: pwsh
+        run: |
+          # На windows-latest WiX 3.14 уже установлен через chocolatey
+          # Ищем путь к candle.exe / light.exe
+          $wixPaths = @(
+            "C:\Program Files (x86)\WiX Toolset v3.14\bin",
+            "C:\Program Files (x86)\WiX Toolset v3.11\bin",
+            "C:\Program Files\WiX Toolset v3.14\bin"
+          )
+          $wixBin = $null
+          foreach ($p in $wixPaths) {
+            if (Test-Path "$p\candle.exe") {
+              $wixBin = $p
+              break
+            }
+          }
+          if (-not $wixBin) {
+            # Пробуем через choco
+            choco install wixtoolset -y --no-progress --force
+            foreach ($p in $wixPaths) {
+              if (Test-Path "$p\candle.exe") {
+                $wixBin = $p
+                break
+              }
+            }
+          }
+          if (-not $wixBin) {
+            Write-Host "ERROR: WiX Toolset не найден"
+            exit 1
+          }
+          Write-Host "WiX found at: $wixBin"
+          echo "$wixBin" >> $env:GITHUB_PATH
+          # Также экспортируем для следующих шагов
+          echo "WIX_BIN=$wixBin" >> $env:GITHUB_ENV
+
+      - name: Verify WiX
+        shell: pwsh
+        run: |
+          & "$env:WIX_BIN\candle.exe" -? 2>&1 | Select-Object -First 3
+          & "$env:WIX_BIN\light.exe" -? 2>&1 | Select-Object -First 3
+          Write-Host "WiX OK"
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller packaging/osint_scraper.spec --noconfirm
+          Get-ChildItem dist/OSINTScraper/OSINTScraper.exe
+
+      - name: Cleanup unused Qt modules (slim down)
+        shell: pwsh
+        run: |
+          $base = "dist/OSINTScraper/_internal/PySide6"
+          # WebEngine (195 МБ) — не используем
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6WebEngine*.dll"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/Qt/resources"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/Qt/translations/qtwebengine*"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/Qt/plugins/webview"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/Qt/plugins/tls"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/QtWebEngineWidgets*.pyd"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/QtWebEngineCore*.pyd"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/QtWebEngineQuick"
+          # 3D
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt63D*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Quick3D*.dll"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/QtQuick3D"
+          # Charts, Bluetooth, Sensors, etc.
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Charts*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Bluetooth*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Nfc*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Sensors*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Positioning*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Location*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6SerialBus*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6SerialPort*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6Pdf*.dll"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$base/Qt/lib/Qt6DataVisualization*.dll"
+          # IDE tools
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/assistant"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/designer"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/linguist"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/lrelease"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/lupdate"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/qmlls"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/qmlformat"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/lconvert"
+          # Headers
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$base/include"
+          Get-ChildItem -Path "$base" -Filter "*.pyi" | Remove-Item -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleanup done. Size:"
+          (Get-ChildItem -Recurse dist/OSINTScraper | Measure-Object -Property Length -Sum).Sum / 1MB | ForEach-Object { "{0:N1} MB" -f $_ }
+
+      - name: Verify exe exists + copy debug launcher
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/OSINTScraper/OSINTScraper.exe")) {
+            Write-Host "ERROR: OSINTScraper.exe not found"
+            exit 1
+          }
+          $size = (Get-Item "dist/OSINTScraper/OSINTScraper.exe").Length / 1MB
+          Write-Host "✓ OSINTScraper.exe exists, size: $([math]::Round($size, 1)) MB"
+
+          # Копируем debug .bat рядом с exe (для пользователей чтобы могли увидеть ошибки)
+          Copy-Item "packaging/OSINTScraper-debug.bat" -Destination "dist/OSINTScraper/" -ErrorAction SilentlyContinue
+          if (Test-Path "dist/OSINTScraper/OSINTScraper-debug.bat") {
+            Write-Host "✓ OSINTScraper-debug.bat copied"
+          } else {
+            # Если не скопировалось — создаём прямо тут
+            @"
+@echo off
+cd /d "%~dp0"
+echo === OSINT Scraper debug mode ===
+echo Crash log: %LOCALAPPDATA%\OSINTScraper\logs\crash.log
+echo.
+OSINTScraper.exe
+echo.
+echo === Exited with code: %ERRORLEVEL% ===
+echo Crash log content:
+type "%LOCALAPPDATA%\OSINTScraper\logs\crash.log" 2>nul
+echo.
+pause
+"@ | Out-File -FilePath "dist/OSINTScraper/OSINTScraper-debug.bat" -Encoding ascii
+            Write-Host "✓ OSINTScraper-debug.bat created inline"
+          }
+
+      - name: Harvest files with heat.exe
+        shell: pwsh
+        run: |
+          & "$env:WIX_BIN\heat.exe" dir dist/OSINTScraper `
+            -cg ProductComponents `
+            -dr INSTALLDIR `
+            -ke -srd -sreg -gg -var var.SourceDir `
+            -platform x64 `
+            -out packaging/ProductComponents.wxs `
+            -t packaging/heat-transform.xslt
+          if (-not (Test-Path packaging/ProductComponents.wxs)) {
+            Write-Host "ERROR: heat.exe failed to generate ProductComponents.wxs"
+            exit 1
+          }
+          Write-Host "heat output generated. First 30 lines:"
+          Get-Content packaging/ProductComponents.wxs -Head 30
+
+      - name: Compile with candle.exe
+        shell: pwsh
+        run: |
+          $srcDir = "$env:GITHUB_WORKSPACE\dist\OSINTScraper"
+          & "$env:WIX_BIN\candle.exe" packaging/osint_scraper.wxs `
+                 -out packaging/osint_scraper.wixobj `
+                 -dSourceDir="$srcDir" `
+                 -arch x64 `
+                 -ext WixUIExtension `
+                 -ext WixUtilExtension
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: candle failed for osint_scraper.wxs"
+            exit 1
+          }
+          & "$env:WIX_BIN\candle.exe" packaging/ProductComponents.wxs `
+                 -out packaging/ProductComponents.wixobj `
+                 -dSourceDir="$srcDir" `
+                 -arch x64
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: candle failed for ProductComponents.wxs"
+            exit 1
+          }
+          Get-ChildItem packaging/*.wixobj
+
+      - name: Link MSI with light.exe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $srcDir = "$env:GITHUB_WORKSPACE\dist\OSINTScraper"
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { '${{ github.event.inputs.version }}' }
+          if (-not $version) { $version = '1.1.0' }
+          # -sice:ICE80 — отключает проверку 32/64 bit (мы знаем что делаем)
+          # -sice:ICE61 — позволяет major upgrade
+          # -sice:ICE38 — не требует advertiser shortcut (у нас обычные)
+          # -sice:ICE43 — то же самое
+          & "$env:WIX_BIN\light.exe" packaging/osint_scraper.wixobj `
+                packaging/ProductComponents.wixobj `
+                -out "packaging/OSINTScraper-$version.msi" `
+                -ext WixUIExtension `
+                -ext WixUtilExtension `
+                -sice:ICE80 `
+                -sice:ICE61 `
+                -sice:ICE38 `
+                -sice:ICE43 `
+                -sice:ICE57 `
+                -b "$srcDir"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: light.exe failed — MSI не собран. ZIP продолжит пайплайн."
+            exit 0
+          }
+          if (Test-Path "packaging/OSINTScraper-$version.msi") {
+            $msiSize = (Get-Item "packaging/OSINTScraper-$version.msi").Length / 1MB
+            Write-Host "✓ MSI собран, размер: $([math]::Round($msiSize, 1)) MB"
+          }
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.+)') { $matches[1] } else { '${{ github.event.inputs.version }}' }
+          if (-not $version) { $version = '1.1.0' }
+          Compress-Archive -Path dist/OSINTScraper/* -DestinationPath "OSINTScraper-$version-windows-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem "OSINTScraper-$version-windows-x64.zip"
+
+      - name: Upload MSI artifact (if exists)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSINTScraper-windows-msi
+          path: packaging/*.msi
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSINTScraper-windows-zip
+          path: OSINTScraper-*-windows-x64.zip
+          retention-days: 30
+
+  # --------------------------------------------------------------------
+  # Linux: portable ZIP
+  # --------------------------------------------------------------------
+  build-linux:
+    name: 🐧 Build Linux (ZIP)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libgl1 libfontconfig1 libdbus-1-3 libxkbcommon0 poppler-utils
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller packaging/osint_scraper.spec --noconfirm
+          ls -la dist/OSINTScraper/
+
+      - name: Cleanup unused Qt modules
+        run: |
+          base="dist/OSINTScraper/_internal/PySide6"
+          # WebEngine
+          rm -f $base/Qt/lib/libQt6WebEngine*.so.6
+          rm -rf $base/Qt/resources
+          rm -rf $base/Qt/translations/qtwebengine*
+          rm -rf $base/Qt/plugins/webview
+          rm -rf $base/Qt/plugins/tls
+          rm -f $base/QtWebEngineWidgets.abi3.so
+          rm -f $base/QtWebEngineQuick.abi3.so
+          rm -f $base/QtWebEngineCore.abi3.so
+          rm -rf $base/QtWebEngineQuick
+          # 3D
+          rm -f $base/Qt/lib/libQt63D*.so.6
+          rm -f $base/Qt/lib/libQt6Quick3D*.so.6
+          rm -rf $base/QtQuick3D
+          # Charts, Bluetooth, etc.
+          rm -f $base/Qt/lib/libQt6Charts*.so.6
+          rm -f $base/Qt/lib/libQt6Bluetooth.so.6
+          rm -f $base/Qt/lib/libQt6Nfc.so.6
+          rm -f $base/Qt/lib/libQt6Sensors*.so.6
+          rm -f $base/Qt/lib/libQt6Positioning*.so.6
+          rm -f $base/Qt/lib/libQt6Location.so.6
+          rm -f $base/Qt/lib/libQt6SerialBus.so.6
+          rm -f $base/Qt/lib/libQt6SerialPort.so.6
+          rm -f $base/Qt/lib/libQt6Pdf*.so.6
+          rm -f $base/Qt/lib/libQt6DataVisualization*.so.6
+          # IDE
+          rm -rf $base/assistant $base/designer $base/linguist $base/lrelease $base/lupdate $base/qmlls $base/qmlformat $base/lconvert
+          rm -rf $base/include
+          rm -f $base/*.pyi
+          du -sh dist/OSINTScraper/
+
+      - name: Test binary (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          timeout 8 dist/OSINTScraper/OSINTScraper && echo "✓ Binary started and exited cleanly" || echo "exit code: $?"
+
+      - name: Create portable ZIP
+        run: |
+          version=$(echo "$GITHUB_REF" | sed -n 's|refs/tags/v\(.*\)|\1|p')
+          if [ -z "$version" ]; then version="${{ github.event.inputs.version }}"; fi
+          if [ -z "$version" ]; then version="1.1.0"; fi
+          cd dist
+          zip -r -q "OSINTScraper-$version-linux-x64.zip" OSINTScraper/
+          ls -la "OSINTScraper-$version-linux-x64.zip"
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSINTScraper-linux-zip
+          path: dist/OSINTScraper-*-linux-x64.zip
+          retention-days: 30
+
+  # --------------------------------------------------------------------
+  # Publish: создаём Release и заливаем все артефакты
+  # --------------------------------------------------------------------
+  publish-release:
+    name: 📦 Publish GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows MSI
+        uses: actions/download-artifact@v4
+        with:
+          name: OSINTScraper-windows-msi
+          path: artifacts/
+
+      - name: Download Windows ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: OSINTScraper-windows-zip
+          path: artifacts/
+
+      - name: Download Linux ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: OSINTScraper-linux-zip
+          path: artifacts/
+
+      - name: List artifacts
+        run: |
+          ls -la artifacts/
+          du -sh artifacts/*
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OSINT Scraper v${{ steps.version.outputs.VERSION }}
+          body_path: QUICKSTART.md
+          files: |
+            artifacts/*.msi
+            artifacts/*-windows-x64.zip
+            artifacts/*-linux-x64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: false

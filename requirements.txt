@@ -1,0 +1,25 @@
+# Зависимости OSINT-скраппера v1.1
+
+# HTTP + парсинг
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Excel-отчёт
+openpyxl>=3.1.0
+
+# GUI (PySide6 = официальные биндинги Qt для Python)
+PySide6>=6.6.0
+
+# Опционально (для fallback на JS-сайтах с Cloudflare-защитой)
+# Установить отдельно:
+#   pip install playwright
+#   playwright install chromium
+playwright>=1.40.0; platform_system != "Emscripten"
+
+# Опционально (для конвертации иконок — нужно только при разработке)
+Pillow>=10.0.0
+cairosvg>=2.7.0
+
+# Опционально (для сборки standalone exe / MSI)
+pyinstaller>=6.0.0
