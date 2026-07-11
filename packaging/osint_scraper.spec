@@ -32,6 +32,13 @@ datas = [
     (os.path.join(PROJECT_ROOT, 'packaging/OSINTScraper-debug.bat'), '.'),
 ]
 
+# certifi сертификаты — критично для Windows (без этого SSL не работает)
+try:
+    import certifi
+    datas.append((os.path.dirname(certifi.__file__), 'certifi'))
+except Exception:
+    pass
+
 # Hidden imports
 hiddenimports = [
     'lxml',
@@ -88,7 +95,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,  # v1.3.4: консоль включена для отладки падений — увидим stderr
+    console=False,  # v1.4.3: консоль выключена (убрали CMD окно)
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

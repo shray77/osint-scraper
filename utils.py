@@ -147,6 +147,19 @@ class HttpClient:
         self.enable_playwright = enable_playwright and HAS_PLAYWRIGHT
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
+
+        # v1.4.3: SSL фикс для Windows (PyInstaller часто теряет certifi)
+        # Явно указываем путь к сертификатам certifi
+        try:
+            import certifi
+            self.session.verify = certifi.where()
+        except Exception:
+            # Если certifi недоступен — отключаем SSL verification
+            # (это небезопасно, но лучше чем вообще не работать)
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            self.session.verify = False
+
         self._pw = None
         self._browser = None
 
@@ -157,32 +170,41 @@ class HttpClient:
         h = {"User-Agent": random.choice(USER_AGENTS)}
         if headers:
             h.update(headers)
+        # Первая попытка — с нормальным SSL
         try:
             r = self.session.get(url, headers=h, timeout=self.timeout, allow_redirects=True)
-            return HttpResponse(
-                url=url,
-                status=r.status_code,
-                text=r.text,
-                final_url=r.url,
-                via="requests",
-            )
+            return HttpResponse(url=url, status=r.status_code, text=r.text, final_url=r.url, via="requests")
         except Exception as e:
-            return HttpResponse(url=url, status=0, text="", final_url=url, via="requests", error=str(e))
+            err1 = str(e)
+        # Fallback: SSL verify off (Windows PyInstaller certifi issue)
+        try:
+            r = self.session.get(url, headers=h, timeout=self.timeout, allow_redirects=True, verify=False)
+            return HttpResponse(url=url, status=r.status_code, text=r.text, final_url=r.url, via="requests-nossl")
+        except Exception as e:
+            return HttpResponse(url=url, status=0, text="", final_url=url, via="requests", error=f"{err1} | {e}")
 
     def _post_requests(self, url: str, data=None, json_body=None, headers: Optional[dict] = None) -> HttpResponse:
         h = {"User-Agent": random.choice(USER_AGENTS)}
         if headers:
             h.update(headers)
+        # Первая попытка — с нормальным SSL
         try:
             if json_body is not None:
                 r = self.session.post(url, json=json_body, headers=h, timeout=self.timeout, allow_redirects=True)
             else:
                 r = self.session.post(url, data=data, headers=h, timeout=self.timeout, allow_redirects=True)
-            return HttpResponse(
-                url=url, status=r.status_code, text=r.text, final_url=r.url, via="requests"
-            )
+            return HttpResponse(url=url, status=r.status_code, text=r.text, final_url=r.url, via="requests")
         except Exception as e:
-            return HttpResponse(url=url, status=0, text="", final_url=url, via="requests", error=str(e))
+            err1 = str(e)
+        # Fallback: SSL verify off
+        try:
+            if json_body is not None:
+                r = self.session.post(url, json=json_body, headers=h, timeout=self.timeout, allow_redirects=True, verify=False)
+            else:
+                r = self.session.post(url, data=data, headers=h, timeout=self.timeout, allow_redirects=True, verify=False)
+            return HttpResponse(url=url, status=r.status_code, text=r.text, final_url=r.url, via="requests-nossl")
+        except Exception as e:
+            return HttpResponse(url=url, status=0, text="", final_url=url, via="requests", error=f"{err1} | {e}")
 
     def _ensure_browser(self):
         if not self.enable_playwright:
